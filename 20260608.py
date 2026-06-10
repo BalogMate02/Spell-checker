@@ -95,32 +95,6 @@ def load_csv(path: str) -> pd.DataFrame:
     df = df[[CFG.target_col, CFG.input_col]].dropna().reset_index(drop=True)
     return df
 
-
-def analyse_errors(df: pd.DataFrame, label: str = "train") -> None:
-    """
-    Perform character-level diff analysis to log the distribution of
-    substitution, insertion, and deletion error types in the dataset.
-    """
-    subs, ins, dels = 0, 0, 0
-    for _, row in df.iterrows():
-        src = row[CFG.input_col]
-        tgt = row[CFG.target_col]
-        ops = difflib.SequenceMatcher(None, src, tgt).get_opcodes()
-        for tag, *_ in ops:
-            if tag == "replace":
-                subs += 1
-            elif tag == "insert":
-                ins += 1
-            elif tag == "delete":
-                dels += 1
-
-    total = subs + ins + dels or 1
-    print(f"\n[Error Analysis — {label}]")
-    print(f"  Substitutions : {subs:>6}  ({100*subs/total:.1f}%)")
-    print(f"  Insertions    : {ins:>6}  ({100*ins/total:.1f}%)")
-    print(f"  Deletions     : {dels:>6}  ({100*dels/total:.1f}%)")
-    print(f"  Total ops     : {total:>6}")
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. TOKENIZATION & DATASET
 # ─────────────────────────────────────────────────────────────────────────────
@@ -266,34 +240,24 @@ def perform_statistical_tests(inputs: list[str], predictions: list[str], referen
 
 def compute_f05_score(predictions: list[str], references: list[str]) -> float:
     """
-    Kiszámítja a szószintű F0.5 pontszámot.
-    
-    Indoklás: Helyesírás-javításnál a pontosság (precision) fontosabb, mint a visszahívás (recall).
-    A felhasználók számára rendkívül zavaró, ha a modell egy helyesen leírt szót 
-    indokolatlanul "kijavít" (false positive). Az F0.5 metrika ezt a preferenciát 
-    tükrözi azáltal, hogy a pontosságot nagyobb súllyal veszi figyelembe.
+    returns a custom F0.5 score that weights precision higher than recall,
     """
-    true_positives = 0
-    false_positives = 0
-    false_negatives = 0
+    # Halmazok generálása egy lépésben (sokkal gyorsabb, mint a hagyományos for ciklus)
+    pred_sets = [set(p.split()) for p in predictions]
+    ref_sets = [set(r.split()) for r in references]
     
-    for pred, ref in zip(predictions, references):
-        pred_words = set(pred.split())
-        ref_words = set(ref.split())
-        
-        true_positives += len(pred_words.intersection(ref_words))
-        false_positives += len(pred_words - ref_words)
-        false_negatives += len(ref_words - pred_words)
-        
-    precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0.0
-    recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0.0
+    # Halmazműveletek összesítése közvetlenül (a bitenkénti operátorok a set objektumokon futnak)
+    true_positives = sum(len(p & r) for p, r in zip(pred_sets, ref_sets))
+    false_positives = sum(len(p - r) for p, r in zip(pred_sets, ref_sets))
+    false_negatives = sum(len(r - p) for p, r in zip(pred_sets, ref_sets))
     
-    if precision == 0 and recall == 0:
+    if true_positives == 0:
         return 0.0
         
-    # F0.5 formula
-    f05 = (1 + 0.5**2) * (precision * recall) / ((0.5**2 * precision) + recall)
-    return float(f05)
+    precision = true_positives / (true_positives + false_positives)
+    recall = true_positives / (true_positives + false_negatives)
+    
+    return float((1 + 0.5**2) * (precision * recall) / ((0.5**2 * precision) + recall))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. INFERENCE UTILITIES
